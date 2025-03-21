@@ -10,12 +10,14 @@ import (
 	"starlabs/models"
 	"starlabs/server"
 	"starlabs/utils"
+
+	"github.com/gorilla/mux"
 )
 
 func main() {
 	// Настройка логирования
 	utils.SetupLogging()
-	defer utils.CloseLogFile() // Закроем файл логов при завершении
+	defer utils.CloseLogFile()
 
 	// Инициализация спутников
 	manager := models.NewSatelliteManager()
@@ -25,11 +27,18 @@ func main() {
 	// Инициализация сервера
 	srv := server.NewServer(manager)
 
-	// Маршруты
-	fs := http.FileServer(http.Dir("static"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
-	http.HandleFunc("/", srv.ServeHome)
-	http.HandleFunc("/ws", srv.HandleWebSocket)
+	// Настройка маршрутов с gorilla/mux
+	router := mux.NewRouter()
+	router.HandleFunc("/", srv.ServeHome).Methods("GET")
+	router.HandleFunc("/api/satellites", srv.GetSatellites).Methods("GET") // Новый маршрут для данных
+	router.HandleFunc("/api/satellite/{id}", srv.UpdateSatellite).Methods("POST")
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
+	// Настройка HTTP-сервера
+	httpServer := &http.Server{
+		Addr:    ":8080",
+		Handler: router,
+	}
 
 	// Грейсфул-шатдаун
 	stop := make(chan os.Signal, 1)
@@ -37,11 +46,12 @@ func main() {
 
 	go func() {
 		log.Println("HTTP server running on port 8080")
-		if err := http.ListenAndServe(":8080", nil); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
 	<-stop
 	log.Println("Shutting down server...")
+	httpServer.Close()
 }

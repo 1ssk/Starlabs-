@@ -16,18 +16,33 @@ type Satellite struct {
 	Speed       float64 `json:"speed"`
 	Inclination float64 `json:"inclination"`
 	PlaneID     int     `json:"plane_id"`
+	CommandChan chan Command
+}
+
+// SatelliteDTO — структура для сериализации, без CommandChan
+type SatelliteDTO struct {
+	ID          int     `json:"id"`
+	Altitude    float64 `json:"altitude"`
+	Theta       float64 `json:"theta"`
+	Speed       float64 `json:"speed"`
+	Inclination float64 `json:"inclination"`
+	PlaneID     int     `json:"plane_id"`
+}
+
+type Command struct {
+	Speed       float64 `json:"speed"`
+	Inclination float64 `json:"inclination"`
 }
 
 type LogEntry struct {
-	Timestamp string    `json:"timestamp"`
-	Satellite Satellite `json:"satellite"`
+	Timestamp string       `json:"timestamp"`
+	Satellite SatelliteDTO `json:"satellite"`
 }
 
 type SatelliteManager struct {
 	Satellites []Satellite
 	Logs       []LogEntry
 	Mutex      *sync.Mutex
-	Broadcast  chan struct{}
 }
 
 func NewSatelliteManager() *SatelliteManager {
@@ -35,7 +50,6 @@ func NewSatelliteManager() *SatelliteManager {
 		Satellites: make([]Satellite, 50),
 		Logs:       make([]LogEntry, 0),
 		Mutex:      &sync.Mutex{},
-		Broadcast:  make(chan struct{}),
 	}
 }
 
@@ -65,6 +79,7 @@ func (sm *SatelliteManager) InitializeSatellites() {
 			Speed:       0.005 + rand.Float64()*0.01,
 			Inclination: planes[planeID].Inclination,
 			PlaneID:     planeID,
+			CommandChan: make(chan Command, 1),
 		}
 	}
 }
@@ -85,32 +100,45 @@ func (sm *SatelliteManager) StartSimulation() {
 				}
 				sm.Logs = append(sm.Logs, logEntry)
 
-				// Запись лога в файл
 				logText := logEntry.Timestamp +
-					" - Sat " +
-					string(logEntry.Satellite.ID) +
-					": Theta=" +
-					fmt.Sprintf("%.2f°", logEntry.Satellite.Theta*180/math.Pi)
+					" - Sat " + fmt.Sprintf("%d", logEntry.Satellite.ID) +
+					": Theta=" + fmt.Sprintf("%.2f°", logEntry.Satellite.Theta*180/math.Pi)
 				utils.WriteLog(logText)
 
 				sm.Mutex.Unlock()
-				sm.Broadcast <- struct{}{}
 			}
 		}
 	}()
 }
 
 func (sm *SatelliteManager) updateSatellitePosition(index int, logChan chan LogEntry) {
+	sat := &sm.Satellites[index]
 	for {
-		sat := &sm.Satellites[index]
-		sat.Theta += sat.Speed
-		if sat.Theta > 2*math.Pi {
-			sat.Theta -= 2 * math.Pi
+		select {
+		case cmd := <-sat.CommandChan:
+			if cmd.Speed > 0 {
+				sat.Speed = cmd.Speed
+			}
+			if cmd.Inclination != 0 {
+				sat.Inclination = cmd.Inclination
+			}
+		default:
+			sat.Theta += sat.Speed
+			if sat.Theta > 2*math.Pi {
+				sat.Theta -= 2 * math.Pi
+			}
+			logChan <- LogEntry{
+				Timestamp: time.Now().Format("15:04:05"),
+				Satellite: SatelliteDTO{
+					ID:          sat.ID,
+					Altitude:    sat.Altitude,
+					Theta:       sat.Theta,
+					Speed:       sat.Speed,
+					Inclination: sat.Inclination,
+					PlaneID:     sat.PlaneID,
+				},
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		logChan <- LogEntry{
-			Timestamp: time.Now().Format("15:04:05"),
-			Satellite: *sat,
-		}
-		time.Sleep(500 * time.Millisecond)
 	}
 }

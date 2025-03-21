@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Starlabs</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+        }
+        #log {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 300px;
+            height: 500px;
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Подключение...</div>
+    <div id="log"></div>
+    <div id="controls">
+        <h3>Управление спутником</h3>
+        <label>Выберите спутник: 
+            <select id="satId">
+                <!-- Список спутников будет заполнен динамически -->
+            </select>
+        </label><br>
+        <label>Скорость (рад/с): <input type="number" id="speed" step="0.001" value="0.005"></label><br>
+        <label>Наклон (рад): <input type="number" id="inclination" step="0.1" value="0"></label><br>
+        <button onclick="sendCommand()">Отправить</button>
+        <h3>Управление Землёй</h3>
+        <label>Скорость вращения Земли (рад/с): <input type="number" id="earthRotationSpeed" step="0.001" value="0.001"></label><br>
+    </div>
+    <script>
+        let satellites = [];
+        let logs = [];
+        let earthImg;
+        let earthRotationAngle = 0;
+        let earthRotationSpeed = 0.001; // Начальная скорость вращения Земли (рад/с)
+
+        function preload() {
+            earthImg = loadImage('/static/earth.jpg');
+        }
+
+        function setup() {
+            createCanvas(1000, 700);
+            fetchData();
+            setInterval(fetchData, 1000);
+
+            // Обновляем скорость вращения Земли при изменении значения
+            document.getElementById('earthRotationSpeed').addEventListener('input', function() {
+                earthRotationSpeed = parseFloat(this.value);
+            });
+        }
+
+        function fetchData() {
+            fetch('/api/satellites')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.text();
+                })
+                .then(text => {
+                    console.log("Полученные данные:", text);
+                    const data = JSON.parse(text);
+                    satellites = data.satellites || [];
+                    logs = data.logs || [];
+                    updateSatellitesList();
+                    updateLogs();
+                    document.getElementById('status').innerHTML = 'Данные обновлены';
+                })
+                .catch(err => {
+                    console.error('Ошибка получения данных:', err);
+                    document.getElementById('status').innerHTML = 'Ошибка получения данных';
+                });
+        }
+
+        function draw() {
+            background(0);
+            translate(width / 2, height / 2);
+
+            // Обновляем угол поворота Земли
+            earthRotationAngle += earthRotationSpeed * (deltaTime / 1000); // deltaTime в миллисекундах
+            if (earthRotationAngle > TWO_PI) {
+                earthRotationAngle -= TWO_PI;
+            }
+
+            // Рисуем Землю с поворотом
+            push();
+            rotate(earthRotationAngle);
+            imageMode(CENTER);
+            image(earthImg, 0, 0, 300, 300);
+            pop();
+
+            // Рисуем оси орбит и спутники, учитывая поворот Земли
+            let drawnPlanes = new Set();
+            for (let sat of satellites) {
+                if (!drawnPlanes.has(sat.plane_id)) {
+                    let minAlt = Math.min(...satellites.map(s => s.altitude));
+                    let maxAlt = Math.max(...satellites.map(s => s.altitude));
+                    let r = map(sat.altitude, minAlt, maxAlt, 200, 250);
+                    stroke(255, 255, 255, 50);
+                    strokeWeight(1);
+                    noFill();
+                    push();
+                    rotate(sat.inclination + earthRotationAngle); // Учитываем поворот Земли
+                    ellipse(0, 0, r * 2, r * 2 * cos(sat.inclination));
+                    pop();
+                    drawnPlanes.add(sat.plane_id);
+                }
+            }
+
+            for (let sat of satellites) {
+                let minAlt = Math.min(...satellites.map(s => s.altitude));
+                let maxAlt = Math.max(...satellites.map(s => s.altitude));
+                let r = map(sat.altitude, minAlt, maxAlt, 200, 250);
+                let x = r * cos(sat.theta + earthRotationAngle); // Учитываем поворот Земли
+                let y = r * sin(sat.theta + earthRotationAngle) * cos(sat.inclination);
+                noStroke();
+                fill(255, 165, 0);
+                ellipse(x, y, 8, 8);
+                fill(255);
+                textSize(10);
+                text(`Sat ${sat.id}`, x + 15, y);
+            }
+        }
+
+        function updateSatellitesList() {
+            const satSelect = document.getElementById('satId');
+            satSelect.innerHTML = '';
+            satellites.forEach(sat => {
+                const option = document.createElement('option');
+                option.value = sat.id;
+                option.text = `Sat ${sat.id}`;
+                satSelect.appendChild(option);
+            });
+        }
+
+        function updateLogs() {
+            let logDiv = document.getElementById('log');
+            logDiv.innerHTML = '<h3>Логи перемещений</h3>';
+            for (let i = logs.length - 1; i >= 0; i--) {
+                let log = logs[i];
+                logDiv.innerHTML += `<p>${log.timestamp} - Sat ${log.satellite.id}: Theta=${(log.satellite.theta * 180 / Math.PI).toFixed(2)}°</p>`;
+            }
+        }
+
+        function sendCommand() {
+            const satId = document.getElementById('satId').value;
+            const speed = parseFloat(document.getElementById('speed').value) * 0.5;
+            const inclination = parseFloat(document.getElementById('inclination').value);
+
+            const command = { speed, inclination };
+            fetch(`/api/satellite/${satId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(command)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data);
+                    fetchData();
+                })
+                .catch(err => console.error('Ошибка:', err));
+        }
+    </script>
+</body>
+</html>
